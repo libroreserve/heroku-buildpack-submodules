@@ -1,17 +1,53 @@
 #!/bin/sh
 
-export BUILD_DIR=$1
-bp_dir=$(cd $(dirname $0); cd ..; pwd)
+set -e
 
+export BUILD_DIR=$1
+bp_dir=$(cd "$(dirname "$0")"; cd ..; pwd)
+
+# exit if no git submodules are present
 if [ ! -f "$BUILD_DIR/.gitmodules" ]; then
   echo "-----> No .gitmodules file found. Skipping."
   exit 0
 fi
 
-export GEM_HOME=$bp_dir/vendor/gems
-export GEM_PATH=$bp_dir/vendor/gems
+# install git submodules
+while IFS= read -r line; do
+  if echo "$line" | grep -q '^\[submodule'; then
+    read -r path_line
+    path=$(echo "$path_line" | awk -F ' = ' '{print $2}')
+    read -r url_line
+    url=$(echo "$url_line" | awk -F ' = ' '{print $2}')
+    branch=""
+    revision=""
 
-echo "---> Installing parseconfig gem"
-gem install 'parseconfig'
+    while IFS= read -r sub_line && ! echo "$sub_line" | grep -q '^\[submodule'; do
+      case "$sub_line" in
+        *branch*)
+          branch=$(echo "$sub_line" | awk -F ' = ' '{print $2}')
+          ;;
+        *revision*)
+          revision=$(echo "$sub_line" | awk -F ' = ' '{print $2}')
+          ;;
+      esac
+    done
 
-ruby $bp_dir/bin/install_git_submodules.rb
+    echo "-----> Installing submodule $path $branch"
+    branch_flag=""
+    [ -n "$branch" ] && branch_flag="-b $branch"
+
+    build_path="$BUILD_DIR/$path"
+    git clone -q --single-branch "$url" $branch_flag "$build_path"
+
+    if [ -n "$revision" ]; then
+      echo "       Setting submodule revision to $revision"
+      (
+        cd "$build_path"
+        git reset --hard "$revision"
+      )
+    fi
+
+    echo "       Removing submodule git folder"
+    rm -rf "$build_path/.git"
+  fi
+done < "$BUILD_DIR/.gitmodules"
